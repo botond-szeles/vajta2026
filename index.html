@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nyári Konferencia Költségkalkulátor</title>
+    
+    <!-- Tailwind CSS a gyors formázáshoz -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React és ReactDOM beimportálása -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel a JSX fordításához a böngészőben -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; }
+        .bg-brand { background-color: #f5b000; } /* A képeken látható sárgás szín */
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // --- ADATOK ÉS ÁRAK ---
+        const DEFAULT_NIGHTS = 3;
+        const PENALTY_FEE = 5000; // Kötbér hiányzó éjszakánként
+        const IFA_PRICE = 400; // Ft/fő/éj (18+)
+        
+        const SPECIAL_DIET_ADULT = 1500; // Ft/fő/éj
+        const SPECIAL_DIET_CHILD = 900;  // Ft/fő/éj
+        const SPECIAL_DIET_VISITOR_ADULT = 500; // Ft/adag
+        const SPECIAL_DIET_VISITOR_CHILD = 300; // Ft/adag
+
+        const ACCOMMODATION_PRICES = {
+            'kastely': { name: 'Kastély szállás (közös fürdő)', price: 13800 },
+            'mara4': { name: 'Maranatha - 4 ágyas szállás', price: 16000 },
+            'mara2': { name: 'Maranatha - 2 ágyas / franciaágyas', price: 17800 },
+            'mara1': { name: 'Maranatha - 1 ágyas szállás', price: 25900 },
+            'csaladi': { name: 'Családi szoba (Apartman)', price: 17800 },
+            'visitor': { name: 'Csak Látogató (Szállás nélkül, étkezéssel)', price: 0 } 
+        };
+
+        const VISITOR_PRICES = {
+            adult: { ticket: 3000, breakfast: 1900, lunch: 2800, dinner: 2500 },
+            child: { ticket: 1500, breakfast: 1100, lunch: 1800, dinner: 1400 }
+        };
+
+        const AGE_GROUPS = {
+            'baba': { name: 'Baba (0-2 éves)', desc: 'Ingyenes' },
+            'gyerek': { name: 'Gyermek (3-9 éves)', desc: '50% kedvezmény' },
+            'kamasz': { name: 'Kamasz (10-17 éves)', desc: 'Felnőtt ár, nincs IFA' },
+            'felnott': { name: 'Felnőtt (18+ éves)', desc: 'Felnőtt ár + IFA' }
+        };
+
+        function App() {
+            // Állapot: maximum 6 fős család
+            const [persons, setPersons] = useState([
+                { id: Date.now(), age: 'felnott', accom: 'csaladi', nights: 3, specialDiet: false, visitorTickets: 0, visitorBreakfasts: 0, visitorLunches: 0, visitorDinners: 0, acceptDiscount: false, extraBreakfast: false, extraLunch: false }
+            ]);
+            const [globalDiscount, setGlobalDiscount] = useState(false);
+
+            // Formázó függvény (magyar formátum, szóköz ezres elválasztó)
+            const formatHUF = (amount) => {
+                return new Intl.NumberFormat('hu-HU', { style: 'currency', currency: 'HUF', maximumFractionDigits: 0 }).format(amount);
+            };
+
+            // Személy hozzáadása
+            const addPerson = () => {
+                if (persons.length < 6) {
+                    setPersons([...persons, { id: Date.now(), age: 'felnott', accom: 'csaladi', nights: 3, specialDiet: false, visitorTickets: 0, visitorBreakfasts: 0, visitorLunches: 0, visitorDinners: 0, acceptDiscount: false, extraBreakfast: false, extraLunch: false }]);
+                }
+            };
+
+            // Személy törlése
+            const removePerson = (id) => {
+                setPersons(persons.filter(p => p.id !== id));
+            };
+
+            // Adat módosítása
+            const updatePerson = (id, field, value) => {
+                setPersons(persons.map(p => p.id === id ? { ...p, [field]: value } : p));
+            };
+
+            // Költség kiszámítása egy főre
+            const calculatePersonCost = (person) => {
+                if (person.age === 'baba') {
+                    return { accom: 0, diet: 0, ifa: 0, discount: 0, extraMealCost: 0, total: 0, details: 'Ingyenes (0 Ft)', nights: 0 };
+                }
+
+                let accomCost = 0;
+                let dietCost = 0;
+                let ifaCost = 0;
+                let extraMealCost = 0;
+                let extraMealDetailsStr = '';
+                let details = '';
+                
+                const currentNights = person.nights || DEFAULT_NIGHTS;
+
+                // 1. Szállás és alap étkezés számítása
+                if (person.accom === 'visitor') {
+                    // Látogató számítás: felhasználó által megadott mennyiségek alapján
+                    const rates = (person.age === 'gyerek') ? VISITOR_PRICES.child : VISITOR_PRICES.adult;
+                    const ticketTotal = rates.ticket * (person.visitorTickets || 0);
+                    const mealsTotal = (rates.breakfast * (person.visitorBreakfasts || 0)) + 
+                                       (rates.lunch * (person.visitorLunches || 0)) + 
+                                       (rates.dinner * (person.visitorDinners || 0));
+                    accomCost = ticketTotal + mealsTotal;
+                    
+                    let parts = [];
+                    if (person.visitorTickets > 0) parts.push(`Jegy: ${person.visitorTickets}db`);
+                    if (person.visitorBreakfasts > 0) parts.push(`Regg: ${person.visitorBreakfasts}db`);
+                    if (person.visitorLunches > 0) parts.push(`Ebéd: ${person.visitorLunches}db`);
+                    if (person.visitorDinners > 0) parts.push(`Vacs: ${person.visitorDinners}db`);
+                    details = parts.length > 0 ? `Látogató: ${parts.join(', ')}` : 'Látogató (nincs kiválasztva étkezés/jegy)';
+                } else {
+                    // Szállóvendég számítás
+                    let baseNightly = ACCOMMODATION_PRICES[person.accom].price;
+                    if (person.age === 'gyerek') {
+                        baseNightly = baseNightly * 0.5; // 50% kedvezmény
+                    }
+                    
+                    const penaltyNights = DEFAULT_NIGHTS - currentNights;
+                    const penaltyCost = penaltyNights * PENALTY_FEE;
+                    
+                    accomCost = (baseNightly * currentNights) + penaltyCost;
+                    
+                    details = `Szállás csomag: ${formatHUF(baseNightly)} x ${currentNights} éj`;
+                    if (penaltyNights > 0) {
+                        details += ` (tartalmaz ${penaltyNights}x ${formatHUF(PENALTY_FEE)} kötbért)`;
+                    }
+
+                    // Extra étkezések szállóvendégeknek (ha < 3 éj)
+                    if (currentNights < DEFAULT_NIGHTS) {
+                        const mealRates = (person.age === 'gyerek') ? VISITOR_PRICES.child : VISITOR_PRICES.adult;
+                        const specialDietSurcharge = (person.age === 'gyerek') ? SPECIAL_DIET_VISITOR_CHILD : SPECIAL_DIET_VISITOR_ADULT;
+                        
+                        let extraParts = [];
+                        if (person.extraBreakfast) {
+                            extraMealCost += mealRates.breakfast + (person.specialDiet ? specialDietSurcharge : 0);
+                            extraParts.push('Reggeli');
+                        }
+                        if (person.extraLunch) {
+                            extraMealCost += mealRates.lunch + (person.specialDiet ? specialDietSurcharge : 0);
+                            extraParts.push('Ebéd');
+                        }
+                        if (extraParts.length > 0) {
+                            extraMealDetailsStr = extraParts.join(' + ');
+                        }
+                    }
+                }
+
+                // 2. Speciális étrend számítása (alap éjszakákra / látogatói adagokra)
+                if (person.specialDiet) {
+                    if (person.accom === 'visitor') {
+                        // Látogató esetén adagonként (összes étkezés száma)
+                        const dietRateMeal = (person.age === 'gyerek') ? SPECIAL_DIET_VISITOR_CHILD : SPECIAL_DIET_VISITOR_ADULT;
+                        const totalMeals = (person.visitorBreakfasts || 0) + (person.visitorLunches || 0) + (person.visitorDinners || 0);
+                        dietCost = dietRateMeal * totalMeals;
+                    } else {
+                        // Szállóvendég esetén éjszakánként
+                        const dietRateNight = (person.age === 'gyerek') ? SPECIAL_DIET_CHILD : SPECIAL_DIET_ADULT;
+                        dietCost = dietRateNight * currentNights;
+                    }
+                }
+
+                // 3. IFA számítás (csak 18+ és csak ha szállóvendég)
+                if (person.age === 'felnott' && person.accom !== 'visitor') {
+                    ifaCost = IFA_PRICE * currentNights;
+                }
+
+                let subtotal = accomCost + dietCost + ifaCost + extraMealCost;
+                let discountAmount = 0;
+
+                // 4. Kedvezmény számítása
+                // Látogatók már nem jogosultak, és csak 3 éjszaka esetén él a kedvezmény szállóvendégeknek
+                const isDiscountEligible = person.accom !== 'visitor' && currentNights === 3;
+                if (person.acceptDiscount && person.age !== 'baba' && isDiscountEligible) {
+                    discountAmount = 25000; // Fix 25000 Ft kedvezmény (akár mínuszba is viheti a részösszeget)
+                }
+
+                return {
+                    accom: accomCost,
+                    diet: dietCost,
+                    ifa: ifaCost,
+                    extraMealCost: extraMealCost,
+                    extraMealDetails: extraMealDetailsStr,
+                    discount: discountAmount,
+                    grossSubtotal: subtotal,
+                    total: subtotal - discountAmount,
+                    details: details,
+                    nights: currentNights
+                };
+            };
+
+            // Vágólapra másolás (Excel/Spreadsheet kompatibilis formátumban)
+            const copyToClipboard = () => {
+                let tsv = "Fő\tKorosztály\tSzállás típusa\tÉjszakák száma\tAlap díj (+kötbér)\tExtra étkezés\tSpeciális étrend felár\tIFA\tKedvezmény (25e)\tEgyéni Összesen (csak 25e után)\n";
+                persons.forEach((p, index) => {
+                    const cost = calculatePersonCost(p);
+                    const nightsStr = p.accom === 'visitor' ? '-' : (p.age === 'baba' ? '-' : `${cost.nights} éj`);
+                    tsv += `${index + 1}. Fő\t${AGE_GROUPS[p.age].name}\t${p.age === 'baba' ? '-' : ACCOMMODATION_PRICES[p.accom].name}\t${nightsStr}\t${cost.accom} Ft\t${cost.extraMealCost} Ft\t${cost.diet} Ft\t${cost.ifa} Ft\t-${cost.discount} Ft\t${cost.total} Ft\n`;
+                });
+                
+                const summaryStats = persons.map(p => calculatePersonCost(p));
+                const totalGross = summaryStats.reduce((sum, cost) => sum + cost.grossSubtotal, 0);
+                const total25kDiscounts = summaryStats.reduce((sum, cost) => sum + cost.discount, 0);
+                
+                const globalDiscountAmount = (globalDiscount && totalGross > 0) ? Math.round(totalGross * 0.10) : 0;
+                const finalGrandTotal = totalGross - globalDiscountAmount - total25kDiscounts;
+                const displayGrandTotal = Math.max(0, finalGrandTotal); // Minimum 0 Ft
+
+                tsv += `\n\t\t\t\t\t\t\t\tBRUTTÓ RÉSZÖSSZEG:\t${totalGross} Ft`;
+                if (globalDiscount) {
+                    tsv += `\n\t\t\t\t\t\t\t\t10% KEDVEZMÉNY (-):\t-${globalDiscountAmount} Ft`;
+                }
+                if (total25kDiscounts > 0) {
+                    tsv += `\n\t\t\t\t\t\t\t\t25E FT KEDVEZMÉNYEK (-):\t-${total25kDiscounts} Ft`;
+                }
+                tsv += `\n\t\t\t\t\t\t\t\tMINDÖSSZESEN:\t${displayGrandTotal} Ft`;
+
+                navigator.clipboard.writeText(tsv).then(() => {
+                    // Egyedi üzenetdoboz megjelenítése alert() helyett
+                    const msgBox = document.createElement('div');
+                    msgBox.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#10b981;color:white;padding:15px;border-radius:5px;box-shadow:0 4px 6px rgba(0,0,0,0.1);z-index:1000;';
+                    msgBox.innerText = 'A táblázat adatai a vágólapra másolva! Beilleszthető Excelbe.';
+                    document.body.appendChild(msgBox);
+                    setTimeout(() => document.body.removeChild(msgBox), 3000);
+                }).catch(err => {
+                    console.error('Hiba a másoláskor: ', err);
+                });
+            };
+
+            // Összesítés számítása
+            const summary = persons.map(p => calculatePersonCost(p));
+            const totalGross = summary.reduce((sum, cost) => sum + cost.grossSubtotal, 0);
+            const total25kDiscounts = summary.reduce((sum, cost) => sum + cost.discount, 0);
+            
+            // KEDVEZMÉNYEK SORRENDJE:
+            // 1. A bruttó (minden kedvezmény előtti) összegből levonjuk a 10%-ot.
+            const globalDiscountAmount = (globalDiscount && totalGross > 0) ? Math.round(totalGross * 0.10) : 0;
+            // 2. Levonjuk a 25.000 Ft-os fix kedvezményeket.
+            const finalGrandTotal = totalGross - globalDiscountAmount - total25kDiscounts;
+            const displayGrandTotal = Math.max(0, finalGrandTotal); // Minimum 0 Ft jelenjen meg
+
+            return (
+                <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8">
+                    <header className="bg-brand text-white p-6 rounded-t-lg shadow-md mb-6">
+                        <h1 className="text-3xl font-bold uppercase">Konferencia Költségkalkulátor</h1>
+                        <p className="mt-2 text-lg font-medium">Időtartam: max. 4 nap, 3 éjszaka (Érkezés: vacsora, Távozás: ebéd)</p>
+                    </header>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        {/* BAL OLDAL: ŰRLAP */}
+                        <div className="lg:col-span-2 space-y-4">
+                            <div className="flex justify-between items-center bg-white p-4 rounded shadow-sm border-l-4 border-yellow-500">
+                                <h2 className="text-xl font-semibold">Családtagok ({persons.length}/6 fő)</h2>
+                                <button 
+                                    onClick={addPerson} 
+                                    disabled={persons.length >= 6}
+                                    className={`px-4 py-2 rounded font-bold text-white transition ${persons.length >= 6 ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'}`}
+                                >
+                                    + Fő hozzáadása
+                                </button>
+                            </div>
+
+                            {persons.map((person, index) => (
+                                <div key={person.id} className="bg-white p-5 rounded-lg shadow-md border border-gray-200 relative">
+                                    <div className="flex justify-between items-center mb-4 border-b pb-2">
+                                        <h3 className="text-lg font-bold text-gray-700">{index + 1}. Fő beállításai</h3>
+                                        {persons.length > 1 && (
+                                            <button onClick={() => removePerson(person.id)} className="text-red-500 hover:text-red-700 font-bold text-sm">
+                                                ✖ Törlés
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        {/* Korosztály */}
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Életkor (Korosztály)</label>
+                                            <select 
+                                                value={person.age} 
+                                                onChange={(e) => updatePerson(person.id, 'age', e.target.value)}
+                                                className="w-full border border-gray-300 rounded p-2 focus:ring-yellow-500 focus:border-yellow-500"
+                                            >
+                                                {Object.entries(AGE_GROUPS).map(([key, data]) => (
+                                                    <option key={key} value={key}>{data.name} - {data.desc}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        {/* Szállás */}
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Szállás típusa</label>
+                                            <select 
+                                                value={person.accom} 
+                                                onChange={(e) => updatePerson(person.id, 'accom', e.target.value)}
+                                                disabled={person.age === 'baba'}
+                                                className={`w-full border border-gray-300 rounded p-2 focus:ring-yellow-500 focus:border-yellow-500 ${person.age === 'baba' ? 'bg-gray-100 text-gray-500' : ''}`}
+                                            >
+                                                {Object.entries(ACCOMMODATION_PRICES).map(([key, data]) => (
+                                                    <option key={key} value={key}>{data.name}</option>
+                                                ))}
+                                            </select>
+                                            {person.age === 'baba' && <p className="text-xs text-gray-500 mt-1">Babák számára a szállás ingyenes.</p>}
+                                        </div>
+                                        
+                                        {/* Éjszakák száma */}
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Éjszakák száma</label>
+                                            <select 
+                                                value={person.nights || 3} 
+                                                onChange={(e) => updatePerson(person.id, 'nights', parseInt(e.target.value))}
+                                                disabled={person.age === 'baba' || person.accom === 'visitor'}
+                                                className={`w-full border border-gray-300 rounded p-2 focus:ring-yellow-500 focus:border-yellow-500 ${person.age === 'baba' || person.accom === 'visitor' ? 'bg-gray-100 text-gray-500' : ''}`}
+                                            >
+                                                <option value={3}>3 éjszaka</option>
+                                                <option value={2}>2 éjszaka (1x kötbér)</option>
+                                                <option value={1}>1 éjszaka (2x kötbér)</option>
+                                            </select>
+                                        </div>
+
+                                        {/* Extra étkezések (csak ha < 3 éj és szállóvendég) */}
+                                        {person.accom !== 'visitor' && (person.nights || 3) < 3 && person.age !== 'baba' && (
+                                            <div className="md:col-span-3 flex flex-wrap items-center mt-2 p-3 bg-blue-50 rounded border border-blue-200">
+                                                <span className="text-sm font-bold text-blue-800 mr-6 mb-2 sm:mb-0">Extra étkezések az érkezés napján:</span>
+                                                <label className="flex items-center text-sm text-gray-800 mr-6 cursor-pointer">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        checked={person.extraBreakfast || false}
+                                                        onChange={(e) => updatePerson(person.id, 'extraBreakfast', e.target.checked)}
+                                                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-2"
+                                                    />
+                                                    +1 Reggeli
+                                                </label>
+                                                <label className="flex items-center text-sm text-gray-800 cursor-pointer">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        checked={person.extraLunch || false}
+                                                        onChange={(e) => updatePerson(person.id, 'extraLunch', e.target.checked)}
+                                                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-2"
+                                                    />
+                                                    +1 Ebéd
+                                                </label>
+                                            </div>
+                                        )}
+
+                                        {/* Speciális étrend */}
+                                        <div className="md:col-span-3 flex items-center mt-2">
+                                            <input 
+                                                type="checkbox" 
+                                                id={`diet-${person.id}`}
+                                                checked={person.specialDiet}
+                                                onChange={(e) => updatePerson(person.id, 'specialDiet', e.target.checked)}
+                                                disabled={person.age === 'baba'}
+                                                className="w-5 h-5 text-yellow-600 border-gray-300 rounded focus:ring-yellow-500 disabled:opacity-50"
+                                            />
+                                            <label htmlFor={`diet-${person.id}`} className={`ml-2 block text-sm font-medium ${person.age === 'baba' ? 'text-gray-400' : 'text-gray-900'}`}>
+                                                Speciális étrend igénylése (Normál étrendtől eltérő)
+                                            </label>
+                                        </div>
+
+                                        {/* Kedvezmény (Csak ha NEM látogató és NEM baba) */}
+                                        {person.age !== 'baba' && person.accom !== 'visitor' && (() => {
+                                            const isDiscountEligible = (person.nights || 3) === 3;
+                                            return (
+                                                <div className="md:col-span-3 flex flex-col mt-2">
+                                                    <div className="flex items-center">
+                                                        <input 
+                                                            type="checkbox" 
+                                                            id={`discount-${person.id}`}
+                                                            checked={person.acceptDiscount}
+                                                            onChange={(e) => updatePerson(person.id, 'acceptDiscount', e.target.checked)}
+                                                            disabled={!isDiscountEligible}
+                                                            className="w-5 h-5 text-green-600 border-gray-300 rounded focus:ring-green-500 disabled:opacity-50"
+                                                        />
+                                                        <label htmlFor={`discount-${person.id}`} className={`ml-2 block text-sm font-medium ${!isDiscountEligible ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
+                                                            25 000 Ft kedvezmény, amit 2026 szeptemberében általános, vagy közép iskolát kezdők vehetik igénybe
+                                                        </label>
+                                                    </div>
+                                                    {!isDiscountEligible && (
+                                                        <p className="ml-7 text-xs text-red-500 mt-1 font-semibold">
+                                                            a 25.000 Ft-os kedvezmény csak 3 éjszaka választása esetén érvényesíthető
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            );
+                                        })()}
+
+                                        {/* Látogatói beállítások (csak ha látogató) */}
+                                        {person.accom === 'visitor' && person.age !== 'baba' && (
+                                            <div className="md:col-span-3 grid grid-cols-2 md:grid-cols-4 gap-4 mt-2 p-4 bg-yellow-50 rounded border border-yellow-200">
+                                                <div className="col-span-2 md:col-span-4 mb-1">
+                                                    <h4 className="text-sm font-bold text-gray-800">Látogatói igények megadása:</h4>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-medium text-gray-700 mb-1">Napijegyek száma</label>
+                                                    <input type="number" min="0" max="4" value={person.visitorTickets || 0} onChange={(e) => updatePerson(person.id, 'visitorTickets', Math.max(0, parseInt(e.target.value) || 0))} className="w-full border border-gray-300 rounded p-1 focus:ring-yellow-500 focus:border-yellow-500" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-medium text-gray-700 mb-1">Reggelik száma</label>
+                                                    <input type="number" min="0" max="4" value={person.visitorBreakfasts || 0} onChange={(e) => updatePerson(person.id, 'visitorBreakfasts', Math.max(0, parseInt(e.target.value) || 0))} className="w-full border border-gray-300 rounded p-1 focus:ring-yellow-500 focus:border-yellow-500" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-medium text-gray-700 mb-1">Ebédek száma</label>
+                                                    <input type="number" min="0" max="4" value={person.visitorLunches || 0} onChange={(e) => updatePerson(person.id, 'visitorLunches', Math.max(0, parseInt(e.target.value) || 0))} className="w-full border border-gray-300 rounded p-1 focus:ring-yellow-500 focus:border-yellow-500" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-medium text-gray-700 mb-1">Vacsorák száma</label>
+                                                    <input type="number" min="0" max="4" value={person.visitorDinners || 0} onChange={(e) => updatePerson(person.id, 'visitorDinners', Math.max(0, parseInt(e.target.value) || 0))} className="w-full border border-gray-300 rounded p-1 focus:ring-yellow-500 focus:border-yellow-500" />
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* JOBB OLDAL: ÖSSZESÍTŐ */}
+                        <div className="lg:col-span-1">
+                            <div className="bg-white p-6 rounded-lg shadow-md border-t-8 border-brand sticky top-4">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="text-2xl font-bold text-gray-800">Összesítő</h2>
+                                    <button onClick={copyToClipboard} className="text-sm bg-gray-200 hover:bg-gray-300 text-gray-800 py-1 px-3 rounded flex items-center gap-1 transition" title="Adatok másolása Excelbe">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                                        Másolás
+                                    </button>
+                                </div>
+                                
+                                <div className="space-y-4 mb-6 overflow-x-auto">
+                                    <table className="w-full text-sm text-left text-gray-500">
+                                        <thead className="text-xs text-gray-700 uppercase bg-gray-50">
+                                            <tr>
+                                                <th className="px-2 py-2">Fő</th>
+                                                <th className="px-2 py-2 text-right">Részösszeg</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {persons.map((p, idx) => {
+                                                const cost = summary[idx];
+                                                return (
+                                                    <React.Fragment key={`sum-${p.id}`}>
+                                                        <tr className="bg-white border-b hover:bg-gray-50">
+                                                            <td className="px-2 py-2 font-medium text-gray-900">
+                                                                {idx + 1}. {AGE_GROUPS[p.age].name.split(' ')[0]}
+                                                            </td>
+                                                            <td className="px-2 py-2 text-right font-bold text-gray-800">
+                                                                {formatHUF(cost.total)}
+                                                            </td>
+                                                        </tr>
+                                                        {(cost.total > 0 || cost.discount > 0 || cost.total < 0) && (
+                                                            <tr className="border-b">
+                                                                <td colSpan="2" className="px-2 pb-2 pt-0 text-xs text-gray-500">
+                                                                    <ul className="list-disc list-inside">
+                                                                        <li>Alap díj: {formatHUF(cost.accom)} <span className="text-[10px] text-gray-400">({cost.details})</span></li>
+                                                                        {cost.extraMealCost > 0 && <li className="text-blue-600">Extra étkezés ({cost.extraMealDetails}): {formatHUF(cost.extraMealCost)}</li>}
+                                                                        {cost.diet > 0 && <li>Spec. étrend (alap): {formatHUF(cost.diet)}</li>}
+                                                                        {cost.ifa > 0 && <li>IFA ({cost.nights} éj): {formatHUF(cost.ifa)}</li>}
+                                                                        {cost.discount > 0 && <li className="text-green-600 font-bold">Diákkedvezmény: -{formatHUF(cost.discount)}</li>}
+                                                                    </ul>
+                                                                </td>
+                                                            </tr>
+                                                        )}
+                                                    </React.Fragment>
+                                                )
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                <div className="border-t-2 border-gray-200 pt-4">
+                                    <div className="flex justify-between items-end mb-2 text-gray-500 text-sm">
+                                        <span>Bruttó összesen (kedvezmények nélkül):</span>
+                                        <span>{formatHUF(totalGross)}</span>
+                                    </div>
+                                    {globalDiscount && totalGross > 0 && (
+                                        <div className="flex justify-between items-end mb-2 text-green-600 font-semibold">
+                                            <span>10% Kedvezmény:</span>
+                                            <span>-{formatHUF(globalDiscountAmount)}</span>
+                                        </div>
+                                    )}
+                                    {total25kDiscounts > 0 && (
+                                        <div className="flex justify-between items-end mb-2 text-green-600 font-semibold">
+                                            <span>Diákkedvezmények (25e Ft):</span>
+                                            <span>-{formatHUF(total25kDiscounts)}</span>
+                                        </div>
+                                    )}
+                                    <div className="flex justify-between items-end border-t border-gray-300 pt-2 mt-2">
+                                        <span className="text-lg text-gray-600 font-semibold">Fizetendő összesen:</span>
+                                        <span className="text-3xl font-extrabold text-brand">{formatHUF(displayGrandTotal)}</span>
+                                    </div>
+                                    
+                                    <div className="flex items-center mt-4 p-3 bg-green-50 rounded border border-green-200">
+                                        <input 
+                                            type="checkbox" 
+                                            id="global-discount"
+                                            checked={globalDiscount}
+                                            onChange={(e) => setGlobalDiscount(e.target.checked)}
+                                            className="w-5 h-5 text-green-600 border-gray-300 rounded focus:ring-green-500"
+                                        />
+                                        <label htmlFor="global-discount" className="ml-2 block text-sm font-bold text-gray-800">
+                                            10% kedvezmény érvényesítése (igénybe vehető július 31-ig)
+                                        </label>
+                                    </div>
+                                </div>
+                                
+                                <div className="mt-6 text-xs text-gray-500 bg-yellow-50 p-3 rounded border border-yellow-200">
+                                    <strong>Fontos információk (Feltételezések/Szabályok):</strong><br/>
+                                    - A szállásdíjak alapesetben <strong>3 éjszakára</strong> értendőek. Ennél kevesebb éjszaka választása esetén a rendszer éjszakánként automatikusan 5000 Ft kötbért számol fel az alap szállásdíjhoz.<br/>
+                                    - Rövidebb tartózkodás esetén lehetősége van "Extra étkezéseket" (Reggeli, Ebéd) hozzáadni, ami a látogatói árak alapján kerül felszámolásra.<br/>
+                                    - Az IFA (400 Ft/fő/éj) csak 18 év feletti szállóvendégeknél, és csak a választott éjszakák számára számítódik fel.<br/>
+                                    - A "Csak Látogató" opció választása esetén szabadon megadhatja, hogy az adott személy hány darab napi belépőjegyet, illetve étkezést kér.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
