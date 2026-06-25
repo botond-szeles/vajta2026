@@ -12,8 +12,8 @@
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     
-    <!-- Babel a JSX fordításához a böngészőben -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- JAVÍTVA: Babel fixálása a stabil 7-es verzióra a Babel 8 CORS (file://) hibájának elkerülésére -->
+    <script src="https://unpkg.com/@babel/standalone@7.24.0/babel.min.js"></script>
 
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; }
@@ -86,7 +86,6 @@
                 setPersons(persons.map(p => p.id === id ? { ...p, [field]: value } : p));
             };
 
-            // Költség kiszámítása egy főre
             const calculatePersonCost = (person) => {
                 if (person.age === 'baba') {
                     return { accom: 0, diet: 0, ifa: 0, discount: 0, extraMealCost: 0, grossSubtotal: 0, total: 0, details: 'Ingyenes (0 Ft)', nights: 0 };
@@ -180,7 +179,7 @@
                 // Látogatók már nem jogosultak, és csak 3 éjszaka esetén él a kedvezmény szállóvendégeknek
                 const isDiscountEligible = person.accom !== 'visitor' && currentNights === 3;
                 if (person.acceptDiscount && person.age !== 'baba' && isDiscountEligible) {
-                    discountAmount = 25000; // Fix 25000 Ft kedvezmény (akár mínuszba is viheti a részösszeget)
+                    discountAmount = 25000; // Fix 25000 Ft kedvezmény
                 }
 
                 return {
@@ -197,7 +196,6 @@
                 };
             };
 
-            // Vágólapra másolás (Excel/Spreadsheet kompatibilis formátumban)
             const copyToClipboard = () => {
                 let tsv = "Fő\tKorosztály\tSzállás típusa\tÉjszakák száma\tAlap díj (+kötbér)\tExtra étkezés\tSpeciális étrend felár\tIFA\tKedvezmény (25e)\tEgyéni Összesen (csak 25e után)\n";
                 persons.forEach((p, index) => {
@@ -223,10 +221,36 @@
                 }
                 tsv += `\n\t\t\t\t\t\t\t\tMINDÖSSZESEN:\t${displayGrandTotal} Ft`;
 
-                navigator.clipboard.writeText(tsv).then(() => {
-                    // Egyedi üzenetdoboz megjelenítése alert() helyett
+                // Biztonságos fallback a vágólapra másoláshoz local fájlrendszer esetén
+                const copyText = (text) => {
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        return navigator.clipboard.writeText(text);
+                    } else {
+                        return new Promise((resolve, reject) => {
+                            try {
+                                const textArea = document.createElement("textarea");
+                                textArea.value = text;
+                                textArea.style.position = "fixed";
+                                textArea.style.top = "0";
+                                textArea.style.left = "0";
+                                document.body.appendChild(textArea);
+                                textArea.focus();
+                                textArea.select();
+                                const successful = document.execCommand('copy');
+                                document.body.removeChild(textArea);
+                                if (successful) resolve();
+                                else reject(new Error("Másolás blokkolva"));
+                            } catch (err) {
+                                reject(err);
+                            }
+                        });
+                    }
+                };
+
+                copyText(tsv).then(() => {
+                    // Egyedi sikeres másolás jelző üzenet alert() helyett
                     const msgBox = document.createElement('div');
-                    msgBox.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#10b981;color:white;padding:15px;border-radius:5px;box-shadow:0 4px 6px rgba(0,0,0,0.1);z-index:1000;';
+                    msgBox.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#10b981;color:white;padding:15px;border-radius:5px;box-shadow:0 4px 6px rgba(0,0,0,0.1);z-index:1000;font-weight:bold;';
                     msgBox.innerText = 'A táblázat adatai a vágólapra másolva! Beilleszthető Excelbe.';
                     document.body.appendChild(msgBox);
                     setTimeout(() => document.body.removeChild(msgBox), 3000);
@@ -235,7 +259,7 @@
                 });
             };
 
-            // Összesítés számítása
+            // Összesítés kiszámítása
             const summary = persons.map(p => calculatePersonCost(p));
             const totalGross = summary.reduce((sum, cost) => sum + cost.grossSubtotal, 0);
             const total25kDiscounts = summary.reduce((sum, cost) => sum + cost.discount, 0);
@@ -268,6 +292,7 @@
                                 </button>
                             </div>
 
+                            {}
                             {persons.map((person, index) => (
                                 <div key={person.id} className="bg-white p-5 rounded-lg shadow-md border border-gray-200 relative">
                                     <div className="flex justify-between items-center mb-4 border-b pb-2">
@@ -421,6 +446,7 @@
                             ))}
                         </div>
 
+                        {}
                         {/* JOBB OLDAL: ÖSSZESÍTŐ */}
                         <div className="lg:col-span-1">
                             <div className="bg-white p-6 rounded-lg shadow-md border-t-8 border-brand sticky top-4">
@@ -509,7 +535,7 @@
                                     </div>
                                 </div>
                                 
-                                <div className="mt-6 text-xs text-gray-500 bg-yellow-50 p-3 rounded border border-yellow-200">
+                                <div className="mt-6 text-xs text-gray-500 bg-yellow-50 p-3 rounded border border-yellow-200 leading-relaxed">
                                     <strong>Fontos információk (Feltételezések/Szabályok):</strong><br/>
                                     - A szállásdíjak alapesetben <strong>3 éjszakára</strong> értendőek. Ennél kevesebb éjszaka választása esetén a rendszer éjszakánként automatikusan 5000 Ft kötbért számol fel az alap szállásdíjhoz.<br/>
                                     - Rövidebb tartózkodás esetén lehetősége van "Extra étkezéseket" (Reggeli, Ebéd) hozzáadni, ami a látogatói árak alapján kerül felszámolásra.<br/>
